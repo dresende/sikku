@@ -156,6 +156,13 @@
     transition: fill .18s;
   }
   .num.on { fill: var(--on-accent); }
+  /* Until the first cell is drawn, breathe on the 1 so it is obvious where the
+     stroke has to begin. Killed by the reduced-motion block below. */
+  .stage.waiting #anchor { animation: beckon 2.4s ease-in-out infinite; }
+  @keyframes beckon {
+    0%, 100% { filter: drop-shadow(0 0 0 rgba(255,196,107,0)); }
+    50%      { filter: drop-shadow(0 0 11px rgba(255,196,107,.9)); }
+  }
   .stage.solved #line { animation: sweep .9s cubic-bezier(.2,.9,.3,1); }
   @keyframes sweep {
     0%   { filter: drop-shadow(0 0 9px rgba(255,122,89,.5)); }
@@ -750,6 +757,7 @@
       nums[k].classList.toggle("on", inPath[nc] !== undefined);
     }
     countEl.textContent = path.length + " / " + N;
+    stage.classList.toggle("waiting", path.length === 1 && !solved);
     if (!solved) {
       sayEl.textContent = path.length + " of " + N + " cells filled" +
         (nextCp < CPS.length ? ", heading for number " + (nextCp + 1) : ", every number reached");
@@ -775,11 +783,14 @@
     var p = pt(e), cell = cellAt(p.x, p.y);
     lastPt = p;
     if (cell < 0) return;
-    if (inPath[cell] !== undefined || adjacent(cell, path[path.length - 1])) {
-      drag = true;
-      tryEnter(cell);
-      render();
-    }
+    /* Begin the stroke wherever the finger lands. tryEnter still decides what
+       is legal cell by cell, so nothing illegal gets drawn — but requiring the
+       first touch to land exactly on the head (or the one cell beside it) meant
+       a near miss swallowed the whole swipe silently, and you had to lift and
+       try again. Now the line picks up the moment the finger reaches it. */
+    drag = true;
+    tryEnter(cell);
+    render();
     e.preventDefault();
   });
 
