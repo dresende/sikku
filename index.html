@@ -135,6 +135,10 @@
   .tagline em { font-style: normal; color: var(--accent); }
 
   .stage { margin-top: 5vh; }
+  /* iOS Safari does not reliably honour touch-action on an SVG element, so the
+     rule has to live on an HTML box as well. Without it Safari treats the first
+     part of a stroke as a possible page pan. */
+  .boardwrap { touch-action: none; -webkit-tap-highlight-color: transparent; }
   .board {
     width: min(78vw, 340px); aspect-ratio: 1; display: block; margin: 0 auto;
     touch-action: none; -webkit-tap-highlight-color: transparent;
@@ -351,6 +355,7 @@
   <h1 class="tagline">One line. Every cell. <em>In order.</em></h1>
 
   <div class="stage" id="stage">
+    <div class="boardwrap">
     <svg class="board" id="board" viewBox="0 0 500 500" tabindex="0"
          role="application"
          aria-label="Playable puzzle board, 5 by 5, 5 numbers. Drag from the 1, or use the arrow keys, to draw the line."
@@ -398,6 +403,7 @@
         <text class="num" data-c="6"  x="150" y="150">5</text>
       </g>
     </svg>
+    </div>
     <p id="boardHelp" class="sr">This is level 14 of the first chapter. Reach the numbers
     in order and fill all 25 cells. Drag back over the line to erase.</p>
     <p class="sr" id="say" aria-live="polite"></p>
@@ -772,59 +778,114 @@
     }
   }
 
-  /* ------------------------------------------------------------- pointer IO */
-  function pt(e) {
+  /* ---------------------------------------------------------------- input IO
+     Touch and pointer are wired separately on purpose.
+
+     iOS Safari does not reliably honour `touch-action: none` on an SVG element,
+     so it withholds pointermove while it works out whether the gesture is a page
+     pan. The stroke is being tracked the whole time but nothing is painted, and
+     then the first move it does deliver carries a large delta — the segment walk
+     fills in every cell it crossed at once, so the line appears several cells in
+     rather than following your finger. If Safari decides it *was* a pan it fires
+     pointercancel instead and the stroke dies silently, which is why starting
+     took a few attempts. Native touch handlers with preventDefault() settle it on
+     the first pixel; pointer events still drive mouse and pen. */
+
+  function toBoard(clientX, clientY) {
     var r = svg.getBoundingClientRect();
-    return { x: (e.clientX - r.left) / r.width * (W * CS),
-             y: (e.clientY - r.top) / r.height * (H * CS) };
+    if (!r.width || !r.height) return null;
+    return { x: (clientX - r.left) / r.width * (W * CS),
+             y: (clientY - r.top) / r.height * (H * CS) };
   }
-  function cellAt(x, y) {
+  function cellAtXY(x, y) {
     var c = Math.floor(x / CS), r = Math.floor(y / CS);
     if (r < 0 || c < 0 || r >= H || c >= W) return -1;
     return r * W + c;
   }
 
-  svg.addEventListener("pointerdown", function (e) {
+  function beginStroke(clientX, clientY) {
     if (solved) return;
-    if (e.isTrusted && e.pointerType === "touch") touchMode = true;
-    try { svg.setPointerCapture(e.pointerId); } catch (err) {}
-    var p = pt(e), cell = cellAt(p.x, p.y);
-    lastPt = p;
+    var p = toBoard(clientX, clientY);
+    if (!p) return;
+    var cell = cellAtXY(p.x, p.y);
     if (cell < 0) return;
-    /* Begin the stroke wherever the finger lands. tryEnter still decides what
-       is legal cell by cell, so nothing illegal gets drawn — but requiring the
-       first touch to land exactly on the head (or the one cell beside it) meant
-       a near miss swallowed the whole swipe silently, and you had to lift and
-       try again. Now the line picks up the moment the finger reaches it. */
+    lastPt = p;
+    /* Begin wherever the finger lands — tryEnter still judges every cell, so a
+       near miss no longer swallows the whole stroke. */
     drag = true;
     tryEnter(cell);
     render();
-    e.preventDefault();
-  });
+  }
 
-  svg.addEventListener("pointermove", function (e) {
+  function moveStroke(clientX, clientY) {
     if (!drag || solved) return;
-    var p = pt(e), from = lastPt || p;
-    /* walk the segment so a fast flick can't skip a cell */
+    var p = toBoard(clientX, clientY);
+    if (!p) return;
+    var from = lastPt || p;
     var dx = p.x - from.x, dy = p.y - from.y;
+    /* walk the segment so a fast flick can't skip a cell */
     var steps = Math.max(1, Math.ceil(Math.sqrt(dx * dx + dy * dy) / (CS * 0.34)));
     for (var s = 1; s <= steps; s++) {
-      var cell = cellAt(from.x + dx * s / steps, from.y + dy * s / steps);
+      var cell = cellAtXY(from.x + dx * s / steps, from.y + dy * s / steps);
       if (cell >= 0 && cell !== path[path.length - 1]) tryEnter(cell);
       if (solved) break;
     }
     lastPt = p;
     render();
+  }
+
+  function endStroke() { drag = false; lastPt = null; }
+
+  /* --- touch: the path phones actually take ---
+     lastTouchAt suppresses the compatibility mouse events a browser synthesises
+     just after a touch. A sticky "this is a touch device" flag would be wrong:
+     an iPad with a trackpad is both, and must keep working with either. */
+  var lastTouchAt = 0;
+  svg.addEventListener("touchstart", function (e) {
+    lastTouchAt = Date.now();
+    if (e.isTrusted) touchMode = true;
+    var t = e.changedTouches[0];
+    beginStroke(t.clientX, t.clientY);
+    /* Only claim the gesture if a stroke actually began, so a solved board can
+       still be scrolled past. */
+    if (drag) e.preventDefault();
+  }, { passive: false });
+
+  svg.addEventListener("touchmove", function (e) {
+    lastTouchAt = Date.now();
+    if (!drag) return;
+    var t = e.changedTouches[0];
+    moveStroke(t.clientX, t.clientY);
+    e.preventDefault();
+  }, { passive: false });
+
+  function endTouch() { lastTouchAt = Date.now(); endStroke(); }
+  svg.addEventListener("touchend", endTouch);
+  svg.addEventListener("touchcancel", endTouch);
+
+  /* --- mouse and pen --- */
+  function fromTouch(e) {
+    return e.pointerType === "touch" || Date.now() - lastTouchAt < 600;
+  }
+  svg.addEventListener("pointerdown", function (e) {
+    if (fromTouch(e)) return;
+    try { svg.setPointerCapture(e.pointerId); } catch (err) {}
+    beginStroke(e.clientX, e.clientY);
     e.preventDefault();
   });
 
-  function endDrag() { drag = false; lastPt = null; }
-  svg.addEventListener("pointerup", endDrag);
-  svg.addEventListener("pointercancel", endDrag);
-  svg.addEventListener("lostpointercapture", endDrag);
-  /* if the pointer is released outside the board, the svg never hears about it */
-  window.addEventListener("pointerup", endDrag);
-  window.addEventListener("blur", endDrag);
+  svg.addEventListener("pointermove", function (e) {
+    if (fromTouch(e)) return;
+    moveStroke(e.clientX, e.clientY);
+    e.preventDefault();
+  });
+
+  svg.addEventListener("pointerup", endStroke);
+  svg.addEventListener("pointercancel", endStroke);
+  svg.addEventListener("lostpointercapture", endStroke);
+  /* released outside the board, the svg never hears about it */
+  window.addEventListener("pointerup", endStroke);
+  window.addEventListener("blur", endStroke);
 
   /* Keyboard / VoiceOver: the app offers four directional actions, so does this. */
   var KEYS = { ArrowUp: -W, ArrowDown: W, ArrowLeft: -1, ArrowRight: 1 };
