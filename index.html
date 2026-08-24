@@ -148,10 +148,19 @@
   .board:focus-visible { outline: 3px solid var(--accent); outline-offset: 8px; border-radius: 10px; }
   .cell { fill: rgba(255,255,255,.048); }
   .cell.cp { fill: rgba(255,196,107,.11); stroke: rgba(255,196,107,.16); stroke-width: 2; }
+  /* No CSS filter on the line, deliberately. A stroke drawn along a single row
+     or column has a bounding box with zero height or zero width, and a CSS
+     filter's region IS that bounding box — so a filtered line silently paints
+     nothing at all until the path first turns a corner. The glow is a second,
+     wider, semi-transparent polyline instead: pure geometry, nothing to
+     collapse. */
+  #glow {
+    fill: none; stroke: var(--ch1b); stroke-width: 62; opacity: .2;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
   #line {
     fill: none; stroke: url(#lg); stroke-width: 44;
     stroke-linecap: round; stroke-linejoin: round;
-    filter: drop-shadow(0 0 9px rgba(255,122,89,.5));
   }
   .num {
     font-family: ui-rounded, "SF Pro Rounded", -apple-system, "Trebuchet MS", sans-serif;
@@ -160,19 +169,12 @@
     transition: fill .18s;
   }
   .num.on { fill: var(--on-accent); }
-  /* Until the first cell is drawn, breathe on the 1 so it is obvious where the
-     stroke has to begin. Killed by the reduced-motion block below. */
-  .stage.waiting #anchor { animation: beckon 2.4s ease-in-out infinite; }
-  @keyframes beckon {
-    0%, 100% { filter: drop-shadow(0 0 0 rgba(255,196,107,0)); }
-    50%      { filter: drop-shadow(0 0 11px rgba(255,196,107,.9)); }
-  }
-  .stage.solved #line { animation: sweep .9s cubic-bezier(.2,.9,.3,1); }
-  @keyframes sweep {
-    0%   { filter: drop-shadow(0 0 9px rgba(255,122,89,.5)); }
-    45%  { filter: drop-shadow(0 0 26px rgba(255,255,255,.85)) brightness(1.35); }
-    100% { filter: drop-shadow(0 0 9px rgba(255,122,89,.5)); }
-  }
+  /* Until the first cell is drawn the glow is just a dot on the 1, so breathing
+     on it shows where the stroke begins. Killed by the reduced-motion block. */
+  .stage.waiting #glow { animation: beckon 2.4s ease-in-out infinite; }
+  @keyframes beckon { 0%, 100% { opacity: .14; } 50% { opacity: .55; } }
+  .stage.solved #glow { animation: sweep .9s cubic-bezier(.2,.9,.3,1); }
+  @keyframes sweep { 0%, 100% { opacity: .2; } 45% { opacity: .8; } }
 
   .readout {
     display: flex; align-items: center; justify-content: center; gap: 14px;
@@ -361,7 +363,13 @@
          aria-label="Playable puzzle board, 5 by 5, 5 numbers. Drag from the 1, or use the arrow keys, to draw the line."
          aria-describedby="boardHelp">
       <defs>
-        <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+        <!-- userSpaceOnUse, not the default objectBoundingBox: a stroke along one
+             row or column has a zero-height or zero-width bounding box, and a
+             gradient in bounding-box units cannot resolve against that, so the
+             line paints nothing. Anchoring it to the board's own 500x500 space
+             keeps it stable whatever shape the path happens to be. -->
+        <linearGradient id="lg" gradientUnits="userSpaceOnUse"
+                        x1="0" y1="0" x2="500" y2="500">
           <stop offset="0" stop-color="#FFC46B"/>
           <stop offset="1" stop-color="#FF7A59"/>
         </linearGradient>
@@ -394,6 +402,7 @@
         <rect class="cell cp" data-c="24" x="406" y="406" width="88" height="88" rx="18"/>
       </g>
       <circle id="anchor" cx="450" cy="450" r="22" fill="url(#lg)"/>
+      <polyline id="glow" points="450,450 450,450"/>
       <polyline id="line" points="450,450 450,450"/>
       <g>
         <text class="num on" data-c="24" x="450" y="450">1</text>
@@ -666,6 +675,7 @@
   var svg    = document.getElementById("board");
   var stage  = document.getElementById("stage");
   var line   = document.getElementById("line");
+  var glow   = document.getElementById("glow");
   var anchor = document.getElementById("anchor");
   var countEl = document.getElementById("count");
   var bannerEl = document.getElementById("banner");
@@ -762,7 +772,9 @@
     var pts = [], k;
     for (k = 0; k < path.length; k++) pts.push(cx(path[k]) + "," + cy(path[k]));
     if (pts.length === 1) pts.push(pts[0]);   /* a lone round cap = the starting dot */
-    line.setAttribute("points", pts.join(" "));
+    var d = pts.join(" ");
+    line.setAttribute("points", d);
+    glow.setAttribute("points", d);
     anchor.setAttribute("cx", cx(CPS[0]));
     anchor.setAttribute("cy", cy(CPS[0]));
 
