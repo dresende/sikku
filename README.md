@@ -1,6 +1,6 @@
 # Sikku — moved
 
-The website now lives at <https://offline-works.github.io/sikku/>, in the
+The website now lives at <https://sikku.dresende.pt/>, in the
 `offline-works` organisation. Edit it there; nothing in this repository is
 maintained.
 
